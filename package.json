@@ -1,0 +1,35 @@
+{
+  "name": "buddy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "a heyclicky alt for windows",
+  "scripts": {
+    "dev": "hutch run dev",
+    "dev:hmr": "hutch run dev:hmr",
+    "start": "hutch run start",
+    "build": "hutch run build",
+    "build:views": "bun run build:mainview && bun run build:overlay",
+    "build:mainview": "vite build --config vite.mainview.config.ts",
+    "build:overlay": "vite build --config vite.overlay.config.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "effect": "^3.17.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

@@ -1,0 +1,9 @@
+.hutch/
+node_modules/
+build/
+dist/
+artifacts/
+.env
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
