@@ -40,6 +40,8 @@ describe("pointerOverlayPlacement", () => {
     expect(placement.frame.x).toBe(0);
     expect(placement.frame.y).toBe(0);
     expect(PARKED_OVERLAY_FRAME.width).toBe(1);
+    expect(PARKED_OVERLAY_FRAME.x).toBeGreaterThanOrEqual(0);
+    expect(PARKED_OVERLAY_FRAME.y).toBeGreaterThanOrEqual(0);
   });
 });
 

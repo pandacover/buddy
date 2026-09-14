@@ -35,7 +35,7 @@ import {
 const DEV_SERVER_URL = "http://localhost:5173";
 const NOTCH_WIDTH = 460;
 const NOTCH_HEIGHT = 72;
-const NOTCH_EXPANDED_HEIGHT = 420;
+const NOTCH_EXPANDED_HEIGHT = 560;
 const POINTER_MS = 8000;
 
 type PublicSettings = ReturnType<typeof publicSettings> & { hasKey: boolean };
@@ -57,7 +57,7 @@ type NotchRPC = {
         response: { settings: PublicSettings };
       };
       setExpanded: {
-        params: { expanded: boolean };
+        params: { expanded: boolean; height?: number };
         response: { ok: true };
       };
       startTalk: {
@@ -118,9 +118,13 @@ async function getNotchUrl(): Promise<string> {
   return "views://mainview/index.html";
 }
 
-function notchFrame(expanded: boolean) {
+function notchFrame(expanded: boolean, contentHeight?: number) {
   const display = Screen.getPrimaryDisplay();
-  const height = expanded ? NOTCH_EXPANDED_HEIGHT : NOTCH_HEIGHT;
+  const rawHeight = expanded
+    ? Math.max(NOTCH_EXPANDED_HEIGHT, contentHeight ?? 0)
+    : Math.max(NOTCH_HEIGHT, contentHeight ?? NOTCH_HEIGHT);
+  const maxHeight = Math.max(NOTCH_HEIGHT, Math.round(display.workArea.height - 24));
+  const height = Math.min(rawHeight, maxHeight);
   return {
     x: Math.round(display.workArea.x + (display.workArea.width - NOTCH_WIDTH) / 2),
     y: Math.round(display.workArea.y + 10),
@@ -132,17 +136,11 @@ function notchFrame(expanded: boolean) {
 function parkOverlayWindow() {
   overlayWindow.hide();
   overlayWindow.setAlwaysOnTop(false);
-  overlayWindow.setFrame(
-    PARKED_OVERLAY_FRAME.x,
-    PARKED_OVERLAY_FRAME.y,
-    PARKED_OVERLAY_FRAME.width,
-    PARKED_OVERLAY_FRAME.height,
-  );
 }
 
-function raiseNotch() {
+function raiseNotch(activate: boolean) {
   notchWindow?.setAlwaysOnTop(true);
-  notchWindow?.activate();
+  if (activate) notchWindow?.activate();
 }
 
 function toPublic(settings: BuddySettings): PublicSettings {
@@ -211,7 +209,7 @@ function showPointerOverlay(point: PointerTarget, display: {
   overlayWindow.setAlwaysOnTop(true);
   overlayWindow.showInactive();
   pushOverlayPointer(placement.local);
-  raiseNotch();
+  raiseNotch(false);
 }
 
 const overlayLayer = OverlayLive({
@@ -222,7 +220,7 @@ const overlayLayer = OverlayLive({
       pointerTimer = setTimeout(() => {
         pushOverlayPointer(null);
         parkOverlayWindow();
-        raiseNotch();
+        raiseNotch(false);
       }, POINTER_MS);
     }),
   hidePointer: () =>
@@ -247,7 +245,7 @@ const overlayLayer = OverlayLive({
       );
       overlayWindow.setAlwaysOnTop(true);
       overlayWindow.showInactive();
-      raiseNotch();
+      raiseNotch(false);
     }),
 });
 
@@ -409,14 +407,13 @@ const notchRpc = BrowserView.defineRPC<NotchRPC>({
       saveSettings: async (patch) => ({
         settings: await persistSettings(patch),
       }),
-      setExpanded: ({ expanded }) => {
+      setExpanded: ({ expanded, height }) => {
+        const opening = expanded && !settingsExpanded;
         settingsExpanded = expanded;
-        const frame = notchFrame(expanded);
+        if (expanded) parkOverlayWindow();
+        const frame = notchFrame(true, height);
         notchWindow?.setFrame(frame.x, frame.y, frame.width, frame.height);
-        if (expanded) {
-          parkOverlayWindow();
-        }
-        raiseNotch();
+        raiseNotch(opening);
         return { ok: true as const };
       },
       startTalk: async () => {
@@ -456,9 +453,9 @@ notchWindow = new BrowserWindow({
   url,
   titleBarStyle: "hidden",
   transparent: true,
-  passthrough: false,
+  passthrough: true,
   activate: true,
-  frame: notchFrame(false),
+  frame: notchFrame(true),
   rpc: notchRpc,
 });
 notchWindow.setAlwaysOnTop(true);

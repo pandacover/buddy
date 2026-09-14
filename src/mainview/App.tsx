@@ -14,6 +14,10 @@ const STATUS_LABEL: Record<AppStatus, string> = {
   error: "Something broke",
 };
 
+function friendlyHotkey(value: string) {
+  return value.replaceAll("CommandOrControl", "Ctrl").replaceAll("Control", "Ctrl");
+}
+
 export default function App() {
   const [expanded, setExpanded] = useState(false);
   const [status, setStatus] = useState<AppStatus>("idle");
@@ -31,6 +35,7 @@ export default function App() {
   });
   const recorder = useMemo(() => new MicRecorder(), []);
   const recording = useRef(false);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const rpc = electrobun.rpc;
@@ -76,6 +81,21 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [recorder]);
 
+  useEffect(() => {
+    const node = cardRef.current;
+    const rpc = electrobun.rpc;
+    if (!node || !rpc) return;
+
+    const report = () => {
+      const height = Math.ceil(node.getBoundingClientRect().height + 12);
+      void rpc.request.setExpanded({ expanded, height });
+    };
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded]);
+
   async function syncRecording(shouldRecord: boolean) {
     const rpc = electrobun.rpc;
     if (shouldRecord && !recording.current) {
@@ -101,20 +121,25 @@ export default function App() {
     }
   }
 
-  async function toggleExpanded() {
-    const next = !expanded;
-    setExpanded(next);
-    await electrobun.rpc?.request.setExpanded({ expanded: next });
+  function toggleExpanded() {
+    setExpanded((current) => !current);
   }
 
+  const idleLabel = friendlyHotkey(hotkey) || STATUS_LABEL.idle;
+
   return (
-    <div className="h-full w-full px-3 pt-2" style={{ pointerEvents: "auto" }}>
-      <div className="rounded-[28px] border border-white/10 bg-buddy-bg text-white shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
-        <div className="flex items-center gap-3 px-3 py-2">
+    <div className="w-full px-3 pt-2" style={{ pointerEvents: "auto" }}>
+      <div
+        ref={cardRef}
+        className="rounded-[28px] border border-white/10 bg-buddy-bg text-white shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+      >
+        <div className="flex items-center gap-2 px-3 py-2">
           <button
             type="button"
             className="flex min-w-0 flex-1 items-center gap-3 text-left"
-            onClick={() => void toggleExpanded()}
+            onClick={() => toggleExpanded()}
+            aria-expanded={expanded}
+            aria-controls="buddy-settings"
           >
             <span
               className={`h-3 w-3 shrink-0 rounded-full ${
@@ -130,9 +155,18 @@ export default function App() {
                 Buddy
               </span>
               <span className="block truncate text-sm font-medium">
-                {status === "idle" ? hotkey || STATUS_LABEL.idle : STATUS_LABEL[status]}
+                {status === "idle" ? idleLabel : STATUS_LABEL[status]}
               </span>
             </span>
+          </button>
+          <button
+            type="button"
+            className="rounded-full px-3 py-2 text-xs font-medium text-white/80 hover:bg-white/10"
+            onClick={() => toggleExpanded()}
+            aria-expanded={expanded}
+            aria-controls="buddy-settings"
+          >
+            {expanded ? "Close" : "Settings"}
           </button>
           <button
             type="button"
@@ -143,6 +177,7 @@ export default function App() {
             }`}
             onPointerDown={(event) => {
               event.preventDefault();
+              event.stopPropagation();
               event.currentTarget.setPointerCapture(event.pointerId);
               void electrobun.rpc?.request.startTalk({});
             }}
@@ -160,8 +195,15 @@ export default function App() {
         </div>
 
         {expanded ? (
-          <div
+          <form
+            id="buddy-settings"
             className="space-y-3 border-t border-white/10 px-4 py-3 text-sm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void electrobun.rpc?.request.saveSettings(settings).then((result) => {
+                setSettings(result.settings);
+              });
+            }}
             onPointerDown={(event) => event.stopPropagation()}
           >
             <label className="block">
@@ -171,6 +213,7 @@ export default function App() {
                 value={settings.apiKey}
                 placeholder="sk-or-..."
                 type="password"
+                autoComplete="off"
                 onChange={(event) =>
                   setSettings((current) => ({ ...current, apiKey: event.target.value }))
                 }
@@ -212,13 +255,8 @@ export default function App() {
               </label>
             </div>
             <button
-              type="button"
+              type="submit"
               className="w-full rounded-xl bg-buddy-accent px-3 py-2 font-medium"
-              onClick={() => {
-                void electrobun.rpc?.request.saveSettings(settings).then((result) => {
-                  setSettings(result.settings);
-                });
-              }}
             >
               Save settings
             </button>
@@ -228,12 +266,11 @@ export default function App() {
             ) : null}
             {speech ? <p className="text-xs text-buddy-speak">{speech}</p> : null}
             <p className="text-[11px] leading-5 text-white/35">
-              Hold Left Ctrl+Left Alt to talk (Windows). If that is taken, use the
-              toggle shown in the notch (usually Ctrl+Shift+Space) or the mic
-              button. Buddy captures the screen, transcribes you, answers with a
-              vision model, speaks, and points. It never clicks.
+              Hold Ctrl+Alt to talk. If that is taken, use the toggle shown in the notch
+              or the mic button. Click Settings to edit your API key. Buddy never clicks
+              the desktop.
             </p>
-          </div>
+          </form>
         ) : null}
       </div>
     </div>

@@ -63,8 +63,8 @@ Equivalent one-liner if you prefer not to use the wrapper: `bunx electrobun@2.0.
 
 ## Use
 
-1. Leave the always-on notch visible (top center). Click it to open settings.
-2. Save an OpenRouter API key if you did not set `OPENROUTER_API_KEY`.
+1. Leave the always-on notch visible (top center). Click **Settings** (or the Buddy title) to open the API key form.
+2. Save an OpenRouter API key if you did not set `OPENROUTER_API_KEY`. Click **Close** to collapse the form.
 3. **Hold Ctrl+Alt** and speak. Release to stop. If hold does not fire, use the toggle shown on the notch (Buddy tries `Ctrl+Shift+Space`, then `Ctrl+Alt+Space`, then `Ctrl+Shift+B`, then `F8`) or hold the mic button.
 4. Buddy captures the primary display, transcribes with `openai/whisper-large-v3-turbo`, asks the vision model (default `openai/gpt-4o-mini`), speaks with `hexgrad/kokoro-82m` voice `af_sky`, and draws a highlight ring/arrow when the model returns coordinates.
 

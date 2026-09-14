@@ -10,10 +10,10 @@ export type OverlayPlacement = {
   local: { x: number; y: number; label: string };
 };
 
-/** Parked overlay must not cover the notch even if hide() fails on Windows. */
+/** Hidden overlay stays 1×1 on-screen. Do not use -32000 — Windows treats that as minimized. */
 export const PARKED_OVERLAY_FRAME: Rect = {
-  x: -32_000,
-  y: -32_000,
+  x: 0,
+  y: 0,
   width: 1,
   height: 1,
 };
