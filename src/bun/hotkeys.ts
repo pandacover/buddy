@@ -1,7 +1,9 @@
 import { GlobalShortcut } from "electrobun/main";
 import {
   TOGGLE_SHORTCUT_CANDIDATES,
+  friendlyHotkey,
   readTalkKeys,
+  talkHotkeyActions,
   talkKeyEdges,
   type TalkKeySnapshot,
 } from "../shared/talk-keys";
@@ -66,18 +68,11 @@ async function startWindowsHold(handlers: TalkHandlers): Promise<KeyPoller | nul
       const edges = talkKeyEdges(previous, snapshot);
       previous = snapshot;
 
-      if (paused) {
-        if (edges.holdEnd) handlers.onHoldEnd();
-        return;
+      for (const action of talkHotkeyActions(paused, edges)) {
+        if (action === "holdStart") handlers.onHoldStart();
+        else if (action === "holdEnd") handlers.onHoldEnd();
+        else handlers.onToggle();
       }
-
-      if (edges.toggle) {
-        if (snapshot.hold) handlers.onHoldEnd();
-        handlers.onToggle();
-        return;
-      }
-      if (edges.holdStart) handlers.onHoldStart();
-      if (edges.holdEnd) handlers.onHoldEnd();
     }, 16);
 
     return {
@@ -95,6 +90,7 @@ function registerToggleShortcut(onToggle: () => void): string | null {
   for (const accelerator of TOGGLE_SHORTCUT_CANDIDATES) {
     try {
       if (GlobalShortcut.register(accelerator, onToggle)) {
+        console.log(`[buddy] registered toggle ${accelerator}`);
         return accelerator;
       }
     } catch (error) {
@@ -112,16 +108,11 @@ export async function startTalkHotkeys(handlers: TalkHandlers): Promise<{
   const registered = registerToggleShortcut(handlers.onToggle);
 
   const parts: string[] = [];
-  if (hold) {
-    parts.push("Hold Ctrl+Alt to talk");
-  }
-  if (registered) {
-    parts.push(`Toggle ${registered}`);
-  }
-  parts.push("Mic button on the notch");
+  if (hold) parts.push("Hold Ctrl+Alt");
+  if (registered) parts.push(friendlyHotkey(registered));
 
   return {
-    binding: parts.join(" · "),
+    binding: parts.length > 0 ? parts.join(" · ") : "Tap the mic to talk",
     stop: () => {
       hold?.stop();
       if (registered) {

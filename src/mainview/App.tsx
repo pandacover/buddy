@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { AppStatus, BuddySettings } from "../shared/protocol";
-import { MicRecorder } from "./recorder";
+import { EMPTY_AUDIO_ERROR } from "../shared/talk-session";
+import { friendlyHotkey } from "../shared/talk-keys";
+import { MicRecorder, micFailureMessage } from "./recorder";
 import { electrobun, playBase64Audio } from "./rpc";
 
 const STATUS_LABEL: Record<AppStatus, string> = {
   idle: "Hold Ctrl+Alt",
-  listening: "Listening…",
+  listening: "Listening… tap mic to stop",
   capturing: "Capturing…",
   transcribing: "Transcribing…",
   thinking: "Looking…",
@@ -14,14 +16,10 @@ const STATUS_LABEL: Record<AppStatus, string> = {
   error: "Something broke",
 };
 
-function friendlyHotkey(value: string) {
-  return value.replaceAll("CommandOrControl", "Ctrl").replaceAll("Control", "Ctrl");
-}
-
 export default function App() {
   const [expanded, setExpanded] = useState(false);
   const [status, setStatus] = useState<AppStatus>("idle");
-  const [hotkey, setHotkey] = useState("Hold Ctrl+Alt to talk");
+  const [hotkey, setHotkey] = useState("Hold Ctrl+Alt");
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState("");
   const [speech, setSpeech] = useState("");
@@ -35,7 +33,8 @@ export default function App() {
   });
   const recorder = useMemo(() => new MicRecorder(), []);
   const recording = useRef(false);
-  const cardRef = useRef<HTMLDivElement>(null);
+  const recordChain = useRef(Promise.resolve());
+  const shellRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const rpc = electrobun.rpc;
@@ -56,7 +55,7 @@ export default function App() {
     });
 
     rpc.addMessageListener("recordingChanged", (payload) => {
-      void syncRecording(payload.recording);
+      enqueueRecording(payload.recording);
     });
 
     rpc.addMessageListener("playAudio", (payload) => {
@@ -82,12 +81,12 @@ export default function App() {
   }, [recorder]);
 
   useEffect(() => {
-    const node = cardRef.current;
+    const node = shellRef.current;
     const rpc = electrobun.rpc;
     if (!node || !rpc) return;
 
     const report = () => {
-      const height = Math.ceil(node.getBoundingClientRect().height + 12);
+      const height = Math.ceil(node.getBoundingClientRect().height);
       void rpc.request.setExpanded({ expanded, height });
     };
     report();
@@ -96,54 +95,94 @@ export default function App() {
     return () => observer.disconnect();
   }, [expanded]);
 
-  async function syncRecording(shouldRecord: boolean) {
+  function enqueueRecording(shouldRecord: boolean) {
+    recordChain.current = recordChain.current
+      .then(() => applyRecording(shouldRecord))
+      .catch((cause) => {
+        console.warn("[buddy] recording sync failed", cause);
+      });
+  }
+
+  async function applyRecording(shouldRecord: boolean) {
     const rpc = electrobun.rpc;
-    if (shouldRecord && !recording.current) {
+    if (shouldRecord) {
+      if (recording.current) return;
       recording.current = true;
       try {
         await recorder.start();
       } catch (cause) {
         recording.current = false;
-        setError(cause instanceof Error ? cause.message : "Microphone permission denied");
+        const message = micFailureMessage(cause);
+        setError(message);
         setStatus("error");
+        await rpc?.request.reportError({ error: message });
       }
       return;
     }
 
-    if (!shouldRecord && recording.current) {
-      recording.current = false;
-      const audio = await recorder.stop();
-      if (audio && rpc) {
-        await rpc.request.submitAudio(audio);
-      } else if (!audio) {
-        setStatus("idle");
+    if (!recording.current) {
+      await rpc?.request.cancelListen({});
+      return;
+    }
+
+    recording.current = false;
+    const audio = await recorder.stop();
+    if (audio && rpc) {
+      await rpc.request.submitAudio(audio);
+      return;
+    }
+    setError(EMPTY_AUDIO_ERROR);
+    setStatus("error");
+    await rpc?.request.reportError({ error: EMPTY_AUDIO_ERROR });
+  }
+
+  async function onMicClick(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const rpc = electrobun.rpc;
+    if (!rpc) {
+      setStatus("error");
+      setError("Buddy is still starting. Try the mic again in a moment.");
+      return;
+    }
+    try {
+      const result = await rpc.request.toggleTalk({});
+      if (result && result.ok === false && result.error) {
+        setStatus("error");
+        setError(result.error);
       }
+    } catch (cause) {
+      setStatus("error");
+      setError(cause instanceof Error ? cause.message : "Could not start talking");
     }
   }
 
-  function toggleExpanded() {
-    setExpanded((current) => !current);
+  function setTyping(typing: boolean) {
+    void electrobun.rpc?.request.setTyping({ typing });
   }
 
   const idleLabel = friendlyHotkey(hotkey) || STATUS_LABEL.idle;
+  const statusText =
+    status === "error" && error ? error : status === "idle" ? idleLabel : STATUS_LABEL[status];
+  const busy = status === "listening" || status === "capturing";
 
   return (
-    <div className="w-full px-3 pt-2" style={{ pointerEvents: "auto" }}>
+    <div ref={shellRef} className="p-2">
       <div
-        ref={cardRef}
+        data-buddy-card
         className="rounded-[28px] border border-white/10 bg-buddy-bg text-white shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
       >
         <div className="flex items-center gap-2 px-3 py-2">
           <button
             type="button"
             className="flex min-w-0 flex-1 items-center gap-3 text-left"
-            onClick={() => toggleExpanded()}
+            onClick={() => setExpanded((current) => !current)}
             aria-expanded={expanded}
             aria-controls="buddy-settings"
           >
             <span
               className={`h-3 w-3 shrink-0 rounded-full ${
-                status === "listening" || status === "capturing"
+                busy
                   ? "bg-buddy-record shadow-[0_0_12px_#ff4d6d]"
                   : status === "error"
                     ? "bg-amber-400"
@@ -154,15 +193,13 @@ export default function App() {
               <span className="block text-[11px] uppercase tracking-[0.18em] text-white/45">
                 Buddy
               </span>
-              <span className="block truncate text-sm font-medium">
-                {status === "idle" ? idleLabel : STATUS_LABEL[status]}
-              </span>
+              <span className="block text-sm font-medium leading-5">{statusText}</span>
             </span>
           </button>
           <button
             type="button"
             className="rounded-full px-3 py-2 text-xs font-medium text-white/80 hover:bg-white/10"
-            onClick={() => toggleExpanded()}
+            onClick={() => setExpanded((current) => !current)}
             aria-expanded={expanded}
             aria-controls="buddy-settings"
           >
@@ -175,20 +212,9 @@ export default function App() {
                 ? "bg-buddy-record text-white"
                 : "bg-buddy-accent text-white"
             }`}
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              void electrobun.rpc?.request.startTalk({});
-            }}
-            onPointerUp={(event) => {
-              event.preventDefault();
-              void syncRecording(false);
-            }}
-            onPointerCancel={() => {
-              void syncRecording(false);
-            }}
-            aria-label="Hold to talk"
+            onClick={(event) => void onMicClick(event)}
+            aria-label={status === "listening" ? "Stop talking" : "Start talking"}
+            aria-pressed={status === "listening"}
           >
             <MicIcon />
           </button>
@@ -205,6 +231,15 @@ export default function App() {
               });
             }}
             onPointerDown={(event) => event.stopPropagation()}
+            onFocusCapture={(event) => {
+              if (
+                event.target instanceof HTMLInputElement ||
+                event.target instanceof HTMLTextAreaElement
+              ) {
+                setTyping(true);
+              }
+            }}
+            onBlurCapture={() => setTyping(false)}
           >
             <label className="block">
               <span className="mb-1 block text-xs text-white/50">OpenRouter API key</span>
@@ -260,15 +295,14 @@ export default function App() {
             >
               Save settings
             </button>
-            {error ? <p className="text-xs text-buddy-record">{error}</p> : null}
             {transcript ? (
               <p className="text-xs text-white/60">You: {transcript}</p>
             ) : null}
             {speech ? <p className="text-xs text-buddy-speak">{speech}</p> : null}
             <p className="text-[11px] leading-5 text-white/35">
-              Hold Ctrl+Alt to talk. If that is taken, use the toggle shown in the notch
-              or the mic button. Click Settings to edit your API key. Buddy never clicks
-              the desktop.
+              Hold Ctrl+Alt to talk, or tap the mic (works with Settings open). The notch
+              shows the registered toggle. Typing in these fields pauses hold-to-talk only.
+              Buddy never clicks the desktop.
             </p>
           </form>
         ) : null}

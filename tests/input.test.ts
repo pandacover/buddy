@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
+  NOTCH_BOOTSTRAP_HEIGHT,
+  NOTCH_MIN_HEIGHT,
   PARKED_OVERLAY_FRAME,
+  notchWindowHeight,
   pointerOverlayPlacement,
 } from "../src/shared/overlay-geometry";
+import { talkStartBlockers } from "../src/shared/talk-session";
 import {
   VK_CONTROL,
   VK_LMENU,
   VK_MENU,
   VK_SPACE,
+  friendlyHotkey,
   readTalkKeys,
+  talkHotkeyActions,
   talkKeyEdges,
 } from "../src/shared/talk-keys";
 
@@ -80,6 +86,55 @@ describe("talkKeyEdges", () => {
       holdStart: false,
       holdEnd: true,
       toggle: true,
+    });
+  });
+
+  test("paused typing skips hold start but still toggles", () => {
+    expect(
+      talkHotkeyActions(true, { holdStart: true, holdEnd: false, toggle: false }),
+    ).toEqual([]);
+    expect(
+      talkHotkeyActions(true, { holdStart: false, holdEnd: true, toggle: false }),
+    ).toEqual(["holdEnd"]);
+    expect(
+      talkHotkeyActions(true, { holdStart: false, holdEnd: false, toggle: true }),
+    ).toEqual(["toggle"]);
+  });
+
+  test("friendlyHotkey maps Electrobun accelerators to Ctrl", () => {
+    expect(friendlyHotkey("CommandOrControl+Shift+Space")).toBe("Ctrl+Shift+Space");
+  });
+});
+
+describe("notchWindowHeight", () => {
+  test("sizes to the card instead of staying at bootstrap height", () => {
+    expect(notchWindowHeight(96, 1080)).toBe(96);
+    expect(notchWindowHeight(400, 1080)).toBe(400);
+    expect(notchWindowHeight(undefined, 1080)).toBe(NOTCH_MIN_HEIGHT);
+    expect(notchWindowHeight(NOTCH_BOOTSTRAP_HEIGHT, 200)).toBe(176);
+  });
+});
+
+describe("talkStartBlockers", () => {
+  test("requires an API key before listening", () => {
+    expect(talkStartBlockers({ apiKey: "", pipelineRunning: false })).toEqual({
+      ok: false,
+      error: "Add an OpenRouter API key in Settings.",
+    });
+  });
+
+  test("blocks a second pipeline while one is running", () => {
+    expect(
+      talkStartBlockers({ apiKey: "sk-or-v1-test", pipelineRunning: true }),
+    ).toEqual({
+      ok: false,
+      error: "Buddy is still working on the last request.",
+    });
+  });
+
+  test("allows talk when a key is present", () => {
+    expect(talkStartBlockers({ apiKey: "sk-or-v1-test", pipelineRunning: false })).toEqual({
+      ok: true,
     });
   });
 });

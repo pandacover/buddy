@@ -2,18 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body {
-  margin: 0;
+:root {
+  color-scheme: normal;
   background: transparent;
-  overflow: visible;
 }
 
+html,
+body,
 #root {
   margin: 0;
   width: 100%;
-  background: transparent;
+  background: transparent !important;
+  background-color: transparent !important;
   overflow: visible;
+  pointer-events: none;
 }
 
 body {
@@ -30,7 +32,8 @@ body {
 button,
 input,
 label,
-textarea {
+textarea,
+[data-buddy-card] {
   user-select: text;
   pointer-events: auto;
   -webkit-app-region: no-drag;

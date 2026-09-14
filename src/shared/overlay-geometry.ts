@@ -20,6 +20,17 @@ export const PARKED_OVERLAY_FRAME: Rect = {
 
 export const POINTER_OVERLAY_SIZE = 360;
 
+export const NOTCH_WIDTH = 460;
+export const NOTCH_MIN_HEIGHT = 72;
+/** First-paint height so Settings can layout before ResizeObserver shrinks the HWND. */
+export const NOTCH_BOOTSTRAP_HEIGHT = 560;
+
+export function notchWindowHeight(contentHeight: number | undefined, workAreaHeight: number): number {
+  const maxHeight = Math.max(NOTCH_MIN_HEIGHT, Math.round(workAreaHeight - 24));
+  const raw = Math.max(NOTCH_MIN_HEIGHT, Math.ceil(contentHeight ?? NOTCH_MIN_HEIGHT));
+  return Math.min(raw, maxHeight);
+}
+
 export function pointerOverlayPlacement(
   point: { x: number; y: number; label: string },
   display: Rect,

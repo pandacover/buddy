@@ -18,9 +18,17 @@ import type {
 } from "../shared/protocol";
 import { startTalkHotkeys } from "./hotkeys";
 import {
+  NOTCH_BOOTSTRAP_HEIGHT,
+  NOTCH_WIDTH,
   PARKED_OVERLAY_FRAME,
+  notchWindowHeight,
   pointerOverlayPlacement,
 } from "../shared/overlay-geometry";
+import {
+  EMPTY_AUDIO_ERROR,
+  SCREEN_CAPTURE_ERROR,
+  talkStartBlockers,
+} from "../shared/talk-session";
 import { ElectrobunCaptureLive } from "./services/capture-electrobun";
 import { OpenRouterLive } from "./services/openrouter";
 import { OverlayLive } from "./services/overlay";
@@ -31,14 +39,13 @@ import {
   defaultSettingsPath,
   publicSettings,
 } from "./services/settings";
+import { enableWebviewTransparency } from "./webview-transparent";
 
 const DEV_SERVER_URL = "http://localhost:5173";
-const NOTCH_WIDTH = 460;
-const NOTCH_HEIGHT = 72;
-const NOTCH_EXPANDED_HEIGHT = 560;
 const POINTER_MS = 8000;
 
 type PublicSettings = ReturnType<typeof publicSettings> & { hasKey: boolean };
+type TalkResult = { ok: boolean; error?: string; listening?: boolean };
 
 type NotchRPC = {
   bun: RPCSchema<{
@@ -60,12 +67,24 @@ type NotchRPC = {
         params: { expanded: boolean; height?: number };
         response: { ok: true };
       };
+      setTyping: {
+        params: { typing: boolean };
+        response: { ok: true };
+      };
       startTalk: {
         params: Record<string, never>;
-        response: { ok: true };
+        response: TalkResult;
       };
       toggleTalk: {
         params: Record<string, never>;
+        response: TalkResult;
+      };
+      cancelListen: {
+        params: Record<string, never>;
+        response: { ok: true };
+      };
+      reportError: {
+        params: { error: string };
         response: { ok: true };
       };
       submitAudio: {
@@ -118,18 +137,13 @@ async function getNotchUrl(): Promise<string> {
   return "views://mainview/index.html";
 }
 
-function notchFrame(expanded: boolean, contentHeight?: number) {
+function notchFrame(contentHeight?: number) {
   const display = Screen.getPrimaryDisplay();
-  const rawHeight = expanded
-    ? Math.max(NOTCH_EXPANDED_HEIGHT, contentHeight ?? 0)
-    : Math.max(NOTCH_HEIGHT, contentHeight ?? NOTCH_HEIGHT);
-  const maxHeight = Math.max(NOTCH_HEIGHT, Math.round(display.workArea.height - 24));
-  const height = Math.min(rawHeight, maxHeight);
   return {
     x: Math.round(display.workArea.x + (display.workArea.width - NOTCH_WIDTH) / 2),
     y: Math.round(display.workArea.y + 10),
     width: NOTCH_WIDTH,
-    height,
+    height: notchWindowHeight(contentHeight, display.workArea.height),
   };
 }
 
@@ -174,10 +188,12 @@ const overlayWindow = new BrowserWindow({
   frame: PARKED_OVERLAY_FRAME,
   rpc: overlayRpc,
 });
+void enableWebviewTransparency(overlayWindow.webview?.id);
 
 let overlayWasVisible = false;
 let pointerTimer: ReturnType<typeof setTimeout> | null = null;
 let settingsExpanded = false;
+let typingInField = false;
 let lastOverlayPlacement: ReturnType<typeof pointerOverlayPlacement> | null = null;
 
 function pushOverlayPointer(point: PointerTarget | null) {
@@ -267,7 +283,7 @@ let lastError = "";
 let lastHotkey = "";
 let listening = false;
 let pipelineRunning = false;
-let screenshot: ScreenshotPayload | null = null;
+let screenshotPromise: Promise<ScreenshotPayload | null> = Promise.resolve(null);
 let notchWindow: BrowserWindow | null = null;
 
 function publishStatus(
@@ -280,7 +296,9 @@ function publishStatus(
   } = {},
 ) {
   status = next;
-  if (extra.error !== undefined) lastError = extra.error;
+  if (next === "idle") lastError = extra.error ?? "";
+  else if (extra.error !== undefined) lastError = extra.error;
+  else if (next === "listening") lastError = "";
   notchRpc.send.statusChanged({
     status,
     detail: extra.detail,
@@ -314,46 +332,72 @@ async function persistSettings(patch: Partial<BuddySettings>): Promise<PublicSet
   return toPublic(settings);
 }
 
-async function beginListen() {
-  if (listening || pipelineRunning) return;
-  listening = true;
-  lastError = "";
-  publishStatus("capturing", { detail: "Capturing screen" });
-  try {
-    screenshot = await appRuntime.runPromise(captureScreenshot);
-    publishStatus("listening", { detail: "Listening" });
-    notchRpc.send.recordingChanged({ recording: true });
-  } catch (error) {
-    listening = false;
-    screenshot = null;
-    publishStatus("error", {
-      error: error instanceof Error ? error.message : "Failed to start listening",
-    });
-  }
+async function loadApiKey(): Promise<string> {
+  const settings = await appRuntime.runPromise(
+    Effect.gen(function* () {
+      const store = yield* Settings;
+      return yield* store.load();
+    }),
+  );
+  return settings.apiKey;
 }
 
-function toggleTalk() {
-  if (listening) {
-    notchRpc.send.recordingChanged({ recording: false });
-    return;
+async function beginListen(): Promise<TalkResult> {
+  if (listening) return { ok: true, listening: true };
+
+  const blocked = talkStartBlockers({
+    apiKey: await loadApiKey(),
+    pipelineRunning,
+  });
+  if (!blocked.ok) {
+    publishStatus("error", { error: blocked.error });
+    return blocked;
   }
-  void beginListen();
+
+  listening = true;
+  lastError = "";
+  publishStatus("listening", { detail: "Listening" });
+  notchRpc.send.recordingChanged({ recording: true });
+
+  screenshotPromise = appRuntime.runPromise(captureScreenshot).catch((error) => {
+    console.warn("[buddy] screenshot failed", error);
+    return null;
+  });
+  return { ok: true, listening: true };
+}
+
+function requestStopListening() {
+  if (!listening || pipelineRunning) return;
+  notchRpc.send.recordingChanged({ recording: false });
+}
+
+async function toggleTalk(): Promise<TalkResult> {
+  if (listening) {
+    requestStopListening();
+    return { ok: true, listening: false };
+  }
+  return beginListen();
 }
 
 async function finishListen(audio: RecordedAudio) {
   if (pipelineRunning) return;
   listening = false;
-  notchRpc.send.recordingChanged({ recording: false });
+  pipelineRunning = true;
 
-  const captured = screenshot;
-  screenshot = null;
-  if (!captured) {
-    publishStatus("error", { error: "No screenshot was captured." });
+  if (!audio.base64) {
+    pipelineRunning = false;
+    publishStatus("error", { error: EMPTY_AUDIO_ERROR });
     return;
   }
 
-  pipelineRunning = true;
   publishStatus("transcribing", { detail: "Transcribing speech" });
+  const captured = await screenshotPromise;
+  screenshotPromise = Promise.resolve(null);
+  if (!captured) {
+    pipelineRunning = false;
+    publishStatus("error", { error: SCREEN_CAPTURE_ERROR });
+    return;
+  }
   try {
     const result = await appRuntime.runPromise(
       runTalkPipeline({
@@ -387,7 +431,7 @@ async function finishListen(audio: RecordedAudio) {
     }, POINTER_MS);
   } catch (error) {
     publishStatus("error", {
-      error: error instanceof Error ? error.message : "Pipeline failed",
+      error: error instanceof Error ? error.message : "OpenRouter request failed",
     });
   } finally {
     pipelineRunning = false;
@@ -411,17 +455,31 @@ const notchRpc = BrowserView.defineRPC<NotchRPC>({
         const opening = expanded && !settingsExpanded;
         settingsExpanded = expanded;
         if (expanded) parkOverlayWindow();
-        const frame = notchFrame(true, height);
+        const frame = notchFrame(height);
         notchWindow?.setFrame(frame.x, frame.y, frame.width, frame.height);
         raiseNotch(opening);
         return { ok: true as const };
       },
-      startTalk: async () => {
-        void beginListen();
+      setTyping: ({ typing }) => {
+        typingInField = typing;
         return { ok: true as const };
       },
-      toggleTalk: async () => {
-        toggleTalk();
+      startTalk: async () => beginListen(),
+      toggleTalk: async () => toggleTalk(),
+      cancelListen: async () => {
+        if (!pipelineRunning) {
+          listening = false;
+          screenshotPromise = Promise.resolve(null);
+          if (status === "listening" || status === "capturing") publishStatus("idle");
+        }
+        return { ok: true as const };
+      },
+      reportError: async ({ error }) => {
+        if (!pipelineRunning) {
+          listening = false;
+          screenshotPromise = Promise.resolve(null);
+          publishStatus("error", { error });
+        }
         return { ok: true as const };
       },
       submitAudio: async (audio) => {
@@ -434,15 +492,15 @@ const notchRpc = BrowserView.defineRPC<NotchRPC>({
 });
 
 const hotkeys = await startTalkHotkeys({
-  isHoldPaused: () => settingsExpanded,
+  isHoldPaused: () => typingInField,
   onHoldStart: () => {
     void beginListen();
   },
   onHoldEnd: () => {
-    if (listening) notchRpc.send.recordingChanged({ recording: false });
+    requestStopListening();
   },
   onToggle: () => {
-    toggleTalk();
+    void toggleTalk();
   },
 });
 lastHotkey = hotkeys.binding;
@@ -455,11 +513,14 @@ notchWindow = new BrowserWindow({
   transparent: true,
   passthrough: true,
   activate: true,
-  frame: notchFrame(true),
+  frame: notchFrame(NOTCH_BOOTSTRAP_HEIGHT),
   rpc: notchRpc,
 });
 notchWindow.setAlwaysOnTop(true);
 notchWindow.activate();
+void enableWebviewTransparency(notchWindow.webview?.id);
+setTimeout(() => void enableWebviewTransparency(notchWindow?.webview?.id), 50);
+setTimeout(() => void enableWebviewTransparency(notchWindow?.webview?.id), 250);
 notchWindow.on("close", () => {
   Utils.quit();
 });

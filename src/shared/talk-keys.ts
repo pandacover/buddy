@@ -60,6 +60,29 @@ export function talkKeyEdges(
   };
 }
 
+export type TalkHotkeyAction = "holdStart" | "holdEnd" | "toggle";
+
+/** Typing in a field pauses hold-to-talk only. Toggle and mic always work. */
+export function talkHotkeyActions(
+  paused: boolean,
+  edges: TalkKeyEdges,
+): TalkHotkeyAction[] {
+  if (edges.toggle) {
+    const actions: TalkHotkeyAction[] = [];
+    if (edges.holdEnd) actions.push("holdEnd");
+    actions.push("toggle");
+    return actions;
+  }
+  const actions: TalkHotkeyAction[] = [];
+  if (edges.holdStart && !paused) actions.push("holdStart");
+  if (edges.holdEnd) actions.push("holdEnd");
+  return actions;
+}
+
+export function friendlyHotkey(value: string): string {
+  return value.replaceAll("CommandOrControl", "Ctrl").replaceAll("Control", "Ctrl");
+}
+
 /** Tried in order; first successful Electrobun GlobalShortcut wins. */
 export const TOGGLE_SHORTCUT_CANDIDATES = [
   "CommandOrControl+Shift+Space",

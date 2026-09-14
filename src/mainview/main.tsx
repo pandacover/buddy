@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
+document.documentElement.style.background = "transparent";
+document.body.style.background = "transparent";
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
