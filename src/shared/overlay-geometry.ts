@@ -25,9 +25,16 @@ export const NOTCH_MIN_HEIGHT = 72;
 /** First-paint height so Settings can layout before ResizeObserver shrinks the HWND. */
 export const NOTCH_BOOTSTRAP_HEIGHT = 560;
 
-export function notchWindowHeight(contentHeight: number | undefined, workAreaHeight: number): number {
+export function notchWindowHeight(
+  contentHeight: number | undefined,
+  workAreaHeight: number,
+  expanded = false,
+): number {
   const maxHeight = Math.max(NOTCH_MIN_HEIGHT, Math.round(workAreaHeight - 24));
-  const raw = Math.max(NOTCH_MIN_HEIGHT, Math.ceil(contentHeight ?? NOTCH_MIN_HEIGHT));
+  // Settings must grow the HWND before the form can layout. A collapsed
+  // measure (~72px) would otherwise clip the panel inside WebView2.
+  const floor = expanded ? NOTCH_BOOTSTRAP_HEIGHT : NOTCH_MIN_HEIGHT;
+  const raw = Math.max(floor, Math.ceil(contentHeight ?? floor));
   return Math.min(raw, maxHeight);
 }
 

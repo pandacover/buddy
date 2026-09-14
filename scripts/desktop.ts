@@ -1,24 +1,23 @@
 #!/usr/bin/env bun
 /**
- * Windows-safe Electrobun launcher.
- *
- * The npm `electrobun` package is a CLI only: it downloads a paired Hutch
- * archive from GitHub into ~/.hutch/npm/… and forwards `electrobun <cmd>`
- * to that cache. It does not require a global Hutch install, and we never
- * call `electrobun init` (that path runs install.ps1).
- *
- * The CLI file's shebang is `node`. Running it through Bun means a machine
- * with only Bun installed still works.
+ * Build renderers + Electron main/preload, then launch Electron.
+ * Electron is a direct child so Ctrl+C / terminal close can kill it.
  */
-import { existsSync } from "node:fs";
+import * as esbuild from "esbuild";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const electrobunCli = resolve(root, "node_modules/electrobun/bin/electrobun.cjs");
+const require = createRequire(import.meta.url);
+const electronBin = require("electron") as string;
 
-const COMMANDS = ["dev", "start", "build", "hmr", "prepare"] as const;
+const COMMANDS = ["dev", "start", "build"] as const;
 type Command = (typeof COMMANDS)[number];
+
+type Child = ReturnType<typeof Bun.spawn>;
+const tracked = new Set<Child>();
+let shuttingDown = false;
 
 function isCommand(value: string | undefined): value is Command {
   return COMMANDS.includes(value as Command);
@@ -29,41 +28,115 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-async function run(argv: string[]): Promise<void> {
+function killPidTree(pid: number | undefined) {
+  if (pid == null || pid <= 0) return;
+  if (process.platform === "win32") {
+    Bun.spawnSync(["taskkill", "/PID", String(pid), "/T", "/F"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    return;
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // Already gone.
+  }
+}
+
+function killTracked() {
+  for (const child of tracked) {
+    killPidTree(child.pid);
+  }
+  tracked.clear();
+  if (process.platform === "win32") {
+    Bun.spawnSync(["taskkill", "/IM", "electron.exe", "/T", "/F"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  }
+}
+
+function requestShutdown(code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  killTracked();
+  process.exit(code);
+}
+
+process.on("SIGINT", () => requestShutdown(130));
+process.on("SIGTERM", () => requestShutdown(143));
+process.on("SIGHUP", () => requestShutdown(129));
+process.on("exit", () => {
+  killTracked();
+});
+
+async function run(argv: string[], extraEnv?: Record<string, string>): Promise<number> {
   const child = Bun.spawn(argv, {
     cwd: root,
-    env: process.env,
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
   });
+  tracked.add(child);
   const code = await child.exited;
-  if (code !== 0) {
-    process.exit(code ?? 1);
-  }
-}
-
-async function electrobun(args: string[]): Promise<void> {
-  if (!existsSync(electrobunCli)) {
-    fail("Missing the electrobun CLI. Run `bun install` from the repo root first.");
-  }
-  await run([process.execPath, electrobunCli, ...args]);
+  tracked.delete(child);
+  return code ?? 0;
 }
 
 async function bunRun(script: string): Promise<void> {
-  await run([process.execPath, "run", script]);
+  const code = await run([process.execPath, "run", script]);
+  if (shuttingDown) return;
+  if (code !== 0) requestShutdown(code);
 }
 
-function viteBin(): string {
-  return resolve(root, "node_modules/vite/bin/vite.js");
+async function bundleMain(): Promise<void> {
+  const shared = {
+    bundle: true,
+    platform: "node" as const,
+    format: "cjs" as const,
+    target: "es2022",
+    sourcemap: true,
+    logLevel: "info" as const,
+    external: ["electron", "koffi"],
+  };
+  await Promise.all([
+    esbuild.build({
+      ...shared,
+      entryPoints: [resolve(root, "src/main/index.ts")],
+      outfile: resolve(root, "dist/main/index.cjs"),
+    }),
+    esbuild.build({
+      ...shared,
+      entryPoints: [resolve(root, "src/preload/notch.ts")],
+      outfile: resolve(root, "dist/preload/notch.cjs"),
+    }),
+    esbuild.build({
+      ...shared,
+      entryPoints: [resolve(root, "src/preload/overlay.ts")],
+      outfile: resolve(root, "dist/preload/overlay.cjs"),
+    }),
+  ]);
 }
 
-async function runHmr(): Promise<void> {
-  await electrobun(["prepare"]);
-  await bunRun("build:overlay");
+async function waitForUrl(url: string, timeoutMs = 20_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const response = await fetch(url, { method: "HEAD" });
+      if (response.ok || response.status === 404) return;
+    } catch {
+      // Vite is still starting.
+    }
+    await Bun.sleep(150);
+  }
+  throw new Error(`Timed out waiting for ${url}`);
+}
 
-  const vite = Bun.spawn(
-    [process.execPath, viteBin(), "--config", "vite.mainview.config.ts", "--port", "5173"],
+async function startVite(config: string, port: string): Promise<Child> {
+  const child = Bun.spawn(
+    [process.execPath, "x", "vite", "--config", config, "--port", port, "--strictPort"],
     {
       cwd: root,
       env: process.env,
@@ -72,56 +145,41 @@ async function runHmr(): Promise<void> {
       stderr: "inherit",
     },
   );
-  const app = Bun.spawn([process.execPath, electrobunCli, "dev"], {
-    cwd: root,
-    env: process.env,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
+  tracked.add(child);
+  return child;
+}
 
-  const stop = () => {
-    vite.kill();
-    app.kill();
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-
-  const codes = await Promise.all([vite.exited, app.exited]);
-  const failed = codes.find((code) => code !== 0);
-  process.exit(failed ?? 0);
+async function launchElectron(env?: Record<string, string>): Promise<void> {
+  const code = await run([electronBin, "."], env);
+  if (shuttingDown) return;
+  if (code !== 0) requestShutdown(code);
 }
 
 const command = process.argv[2];
-const extra = process.argv.slice(3);
-
 if (!isCommand(command)) {
-  fail(
-    `Usage: bun scripts/desktop.ts <${COMMANDS.join("|")}> [electrobun-args...]\n` +
-      "Primary: bun run dev",
-  );
+  fail(`Usage: bun scripts/desktop.ts <${COMMANDS.join("|")}>\nPrimary: bun run dev`);
 }
 
 switch (command) {
-  case "prepare":
-    await electrobun(["prepare", ...extra]);
-    break;
-  case "dev":
-    await electrobun(["prepare"]);
+  case "build":
     await bunRun("build:views");
-    await electrobun(["dev", "--watch", ...extra]);
+    await bundleMain();
     break;
   case "start":
-    await electrobun(["prepare"]);
     await bunRun("build:views");
-    await electrobun(["dev", ...extra]);
+    await bundleMain();
+    await launchElectron();
     break;
-  case "build":
-    await electrobun(["prepare"]);
-    await bunRun("build:views");
-    await electrobun(["build", "--env=stable", ...extra]);
-    break;
-  case "hmr":
-    await runHmr();
+  case "dev":
+    await bundleMain();
+    await startVite("vite.mainview.config.ts", "5173");
+    await startVite("vite.overlay.config.ts", "5174");
+    await waitForUrl("http://localhost:5173");
+    await waitForUrl("http://localhost:5174");
+    await launchElectron({
+      BUDDY_NOTCH_URL: "http://localhost:5173",
+      BUDDY_OVERLAY_URL: "http://localhost:5174",
+    });
+    requestShutdown(0);
     break;
 }

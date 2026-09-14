@@ -40,21 +40,28 @@ export class MicRecorder {
   private media: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private stream: MediaStream | null = null;
+  private generation = 0;
 
   async start(): Promise<void> {
-    await this.reset();
+    const gen = ++this.generation;
+    await this.resetTracks();
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       throw new Error("This WebView cannot access the microphone.");
     }
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         channelCount: 1,
       },
     });
+    if (gen !== this.generation) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.stream = stream;
     if (typeof MediaRecorder === "undefined") {
-      await this.reset();
+      await this.resetTracks();
       throw new Error("This WebView cannot record audio.");
     }
     const mimeType = pickMimeType();
@@ -69,9 +76,10 @@ export class MicRecorder {
   }
 
   async stop(): Promise<{ format: string; base64: string } | null> {
+    this.generation += 1;
     const media = this.media;
     if (!media || media.state === "inactive") {
-      await this.reset();
+      await this.resetTracks();
       return null;
     }
 
@@ -86,13 +94,13 @@ export class MicRecorder {
       media.stop();
     });
 
-    await this.reset();
+    await this.resetTracks();
     if (blob.size < 64) return null;
     const format = blob.type.includes("mp4") ? "m4a" : "webm";
     return { format, base64: await blobToBase64(blob) };
   }
 
-  private async reset() {
+  private async resetTracks() {
     this.media = null;
     this.chunks = [];
     this.stream?.getTracks().forEach((track) => track.stop());

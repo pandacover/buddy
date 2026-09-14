@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { encodeRgbaPng, scaleRgba } from "../src/bun/png";
+import { encodeRgbaPng, scaleRgba } from "../src/main/png";
 
 describe("encodeRgbaPng", () => {
   test("writes a valid PNG signature for a red pixel", () => {

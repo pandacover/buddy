@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { NOTCH_BOOTSTRAP_HEIGHT } from "../shared/overlay-geometry";
 import type { AppStatus, BuddySettings } from "../shared/protocol";
 import { EMPTY_AUDIO_ERROR } from "../shared/talk-session";
 import { friendlyHotkey } from "../shared/talk-keys";
 import { MicRecorder, micFailureMessage } from "./recorder";
-import { electrobun, playBase64Audio } from "./rpc";
+import { buddy, playBase64Audio } from "./rpc";
 
 const STATUS_LABEL: Record<AppStatus, string> = {
   idle: "Hold Ctrl+Alt",
-  listening: "Listening… tap mic to stop",
+  listening: "Listening… release to send",
   capturing: "Capturing…",
   transcribing: "Transcribing…",
   thinking: "Looking…",
@@ -34,66 +35,119 @@ export default function App() {
   const recorder = useMemo(() => new MicRecorder(), []);
   const recording = useRef(false);
   const recordChain = useRef(Promise.resolve());
+  const holdingMic = useRef(false);
+  const holdGen = useRef(0);
+  const releaseGuards = useRef<(() => void) | null>(null);
+  const expandRev = useRef(0);
   const shellRef = useRef<HTMLDivElement>(null);
+  const [rpcReady, setRpcReady] = useState(false);
 
   useEffect(() => {
-    const rpc = electrobun.rpc;
-    if (!rpc) return;
+    let cancelled = false;
+    let detach: (() => void) | undefined;
+    let retry: ReturnType<typeof setInterval> | undefined;
 
-    void rpc.request.getBootstrap({}).then((boot) => {
-      setSettings(boot.settings);
-      setStatus(boot.status);
-      setHotkey(boot.hotkey);
-      setError(boot.error);
-    });
+    const attach = () => {
+      const api = window.buddy;
+      if (!api || cancelled || detach) return false;
 
-    rpc.addMessageListener("statusChanged", (payload) => {
-      setStatus(payload.status);
-      if (payload.error !== undefined) setError(payload.error);
-      if (payload.transcript) setTranscript(payload.transcript);
-      if (payload.speech) setSpeech(payload.speech);
-    });
+      const onStatus = (payload: {
+        status: AppStatus;
+        error?: string;
+        transcript?: string;
+        speech?: string;
+      }) => {
+        setStatus(payload.status);
+        if (payload.error !== undefined) setError(payload.error);
+        if (payload.transcript) setTranscript(payload.transcript);
+        if (payload.speech) setSpeech(payload.speech);
+      };
+      const onRecording = (payload: { recording: boolean }) => {
+        enqueueRecording(payload.recording);
+      };
+      const onAudio = (payload: { mimeType: string; base64: string }) => {
+        playBase64Audio(payload.mimeType, payload.base64);
+      };
+      const onKeyDown = (event: KeyboardEvent) => {
+        const target = event.target as HTMLElement | null;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
+          return;
+        }
+        const spaceToggle =
+          event.code === "Space" &&
+          event.ctrlKey &&
+          (event.altKey || event.shiftKey);
+        const f8 = event.code === "F8";
+        if (!spaceToggle && !f8) return;
+        event.preventDefault();
+        void api.toggleTalk();
+      };
 
-    rpc.addMessageListener("recordingChanged", (payload) => {
-      enqueueRecording(payload.recording);
-    });
+      void api.getBootstrap().then((boot) => {
+        if (cancelled) return;
+        setSettings(boot.settings);
+        setStatus(boot.status);
+        setHotkey(boot.hotkey);
+        setError(boot.error);
+      });
 
-    rpc.addMessageListener("playAudio", (payload) => {
-      playBase64Audio(payload.mimeType, payload.base64);
-    });
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
-        return;
-      }
-      const spaceToggle =
-        event.code === "Space" &&
-        event.ctrlKey &&
-        (event.altKey || event.shiftKey);
-      const f8 = event.code === "F8";
-      if (!spaceToggle && !f8) return;
-      event.preventDefault();
-      void rpc.request.toggleTalk({});
+      const offStatus = api.onStatusChanged(onStatus);
+      const offRecording = api.onRecordingChanged(onRecording);
+      const offAudio = api.onPlayAudio(onAudio);
+      window.addEventListener("keydown", onKeyDown);
+      setRpcReady(true);
+      detach = () => {
+        offStatus();
+        offRecording();
+        offAudio();
+        window.removeEventListener("keydown", onKeyDown);
+      };
+      return true;
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+
+    if (!attach()) {
+      retry = setInterval(() => {
+        if (attach() && retry) clearInterval(retry);
+      }, 50);
+    }
+
+    return () => {
+      cancelled = true;
+      if (retry) clearInterval(retry);
+      detach?.();
+    };
   }, [recorder]);
 
   useEffect(() => {
     const node = shellRef.current;
-    const rpc = electrobun.rpc;
-    if (!node || !rpc) return;
+    if (!node || !buddy.ready) return;
+
+    if (expanded) {
+      const rev = ++expandRev.current;
+      void buddy.request.setExpanded({
+        expanded: true,
+        height: NOTCH_BOOTSTRAP_HEIGHT,
+        rev,
+      });
+      return;
+    }
 
     const report = () => {
-      const height = Math.ceil(node.getBoundingClientRect().height);
-      void rpc.request.setExpanded({ expanded, height });
+      const height = Math.max(
+        Math.ceil(node.getBoundingClientRect().height),
+        node.scrollHeight,
+      );
+      void buddy.request.setExpanded({
+        expanded: false,
+        height,
+        rev: ++expandRev.current,
+      });
     };
     report();
     const observer = new ResizeObserver(report);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [expanded]);
+  }, [expanded, rpcReady]);
 
   function enqueueRecording(shouldRecord: boolean) {
     recordChain.current = recordChain.current
@@ -104,7 +158,7 @@ export default function App() {
   }
 
   async function applyRecording(shouldRecord: boolean) {
-    const rpc = electrobun.rpc;
+    const rpc = window.buddy;
     if (shouldRecord) {
       if (recording.current) return;
       recording.current = true;
@@ -115,50 +169,133 @@ export default function App() {
         const message = micFailureMessage(cause);
         setError(message);
         setStatus("error");
-        await rpc?.request.reportError({ error: message });
+        await rpc?.reportError({ error: message });
       }
       return;
     }
 
     if (!recording.current) {
-      await rpc?.request.cancelListen({});
+      await rpc?.cancelListen();
       return;
     }
 
     recording.current = false;
     const audio = await recorder.stop();
     if (audio && rpc) {
-      await rpc.request.submitAudio(audio);
+      await rpc.submitAudio(audio);
       return;
     }
     setError(EMPTY_AUDIO_ERROR);
     setStatus("error");
-    await rpc?.request.reportError({ error: EMPTY_AUDIO_ERROR });
+    await rpc?.reportError({ error: EMPTY_AUDIO_ERROR });
   }
 
-  async function onMicClick(event: MouseEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    const rpc = electrobun.rpc;
+  async function holdMic() {
+    if (holdingMic.current) return;
+    const rpc = window.buddy;
     if (!rpc) {
       setStatus("error");
       setError("Buddy is still starting. Try the mic again in a moment.");
       return;
     }
+
+    const gen = ++holdGen.current;
+    holdingMic.current = true;
+    const onLostHold = () => void releaseMic();
+    window.addEventListener("pointerup", onLostHold, true);
+    window.addEventListener("pointercancel", onLostHold, true);
+    window.addEventListener("blur", onLostHold);
+    releaseGuards.current = () => {
+      window.removeEventListener("pointerup", onLostHold, true);
+      window.removeEventListener("pointercancel", onLostHold, true);
+      window.removeEventListener("blur", onLostHold);
+    };
+
+    recording.current = true;
+    setStatus("listening");
+    const startPromise = recorder.start();
+
     try {
-      const result = await rpc.request.toggleTalk({});
+      const result = await rpc.startTalk();
+      if (!holdingMic.current || gen !== holdGen.current) {
+        recording.current = false;
+        await recorder.stop();
+        await rpc.endTalk();
+        await startPromise.catch(() => undefined);
+        return;
+      }
       if (result && result.ok === false && result.error) {
+        holdingMic.current = false;
+        releaseGuards.current?.();
+        releaseGuards.current = null;
+        recording.current = false;
+        await recorder.stop();
         setStatus("error");
         setError(result.error);
+        await startPromise.catch(() => undefined);
+        return;
       }
     } catch (cause) {
+      holdingMic.current = false;
+      releaseGuards.current?.();
+      releaseGuards.current = null;
+      recording.current = false;
+      await recorder.stop();
       setStatus("error");
       setError(cause instanceof Error ? cause.message : "Could not start talking");
+      await startPromise.catch(() => undefined);
+      return;
+    }
+
+    try {
+      await startPromise;
+    } catch (cause) {
+      holdingMic.current = false;
+      releaseGuards.current?.();
+      releaseGuards.current = null;
+      recording.current = false;
+      const message = micFailureMessage(cause);
+      setError(message);
+      setStatus("error");
+      await rpc.reportError({ error: message });
     }
   }
 
+  async function releaseMic() {
+    if (!holdingMic.current) return;
+    holdingMic.current = false;
+    holdGen.current += 1;
+    releaseGuards.current?.();
+    releaseGuards.current = null;
+    try {
+      await window.buddy?.endTalk();
+    } catch (cause) {
+      setStatus("error");
+      setError(cause instanceof Error ? cause.message : "Could not stop talking");
+    }
+  }
+
+  function onMicPointerDown(event: PointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Capture is optional; window pointerup is the fallback.
+    }
+    void holdMic();
+  }
+
+  function onMicPointerUp(event: PointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0 && event.type !== "pointercancel") return;
+    event.preventDefault();
+    event.stopPropagation();
+    void releaseMic();
+  }
+
   function setTyping(typing: boolean) {
-    void electrobun.rpc?.request.setTyping({ typing });
+    void buddy.request.setTyping({ typing });
   }
 
   const idleLabel = friendlyHotkey(hotkey) || STATUS_LABEL.idle;
@@ -167,7 +304,7 @@ export default function App() {
   const busy = status === "listening" || status === "capturing";
 
   return (
-    <div ref={shellRef} className="p-2">
+    <div ref={shellRef} className="px-3 py-2">
       <div
         data-buddy-card
         className="rounded-[28px] border border-white/10 bg-buddy-bg text-white shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
@@ -207,13 +344,15 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={`flex h-10 w-10 items-center justify-center rounded-full ${
+            className={`relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
               status === "listening"
                 ? "bg-buddy-record text-white"
                 : "bg-buddy-accent text-white"
             }`}
-            onClick={(event) => void onMicClick(event)}
-            aria-label={status === "listening" ? "Stop talking" : "Start talking"}
+            onPointerDown={onMicPointerDown}
+            onPointerUp={onMicPointerUp}
+            onPointerCancel={onMicPointerUp}
+            aria-label="Hold to talk"
             aria-pressed={status === "listening"}
           >
             <MicIcon />
@@ -226,7 +365,7 @@ export default function App() {
             className="space-y-3 border-t border-white/10 px-4 py-3 text-sm"
             onSubmit={(event) => {
               event.preventDefault();
-              void electrobun.rpc?.request.saveSettings(settings).then((result) => {
+              void buddy.request.saveSettings(settings).then((result) => {
                 setSettings(result.settings);
               });
             }}
@@ -300,9 +439,9 @@ export default function App() {
             ) : null}
             {speech ? <p className="text-xs text-buddy-speak">{speech}</p> : null}
             <p className="text-[11px] leading-5 text-white/35">
-              Hold Ctrl+Alt to talk, or tap the mic (works with Settings open). The notch
-              shows the registered toggle. Typing in these fields pauses hold-to-talk only.
-              Buddy never clicks the desktop.
+              Hold Ctrl+Alt or hold the mic to talk (works with Settings open). The notch
+              shows the registered toggle shortcut. Typing in these fields pauses
+              hold-to-talk only. Buddy never clicks the desktop.
             </p>
           </form>
         ) : null}

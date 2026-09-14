@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
-import { makeOpenRouterClient, OpenRouter } from "../src/bun/services/openrouter";
-import { OverlayService } from "../src/bun/services/overlay";
-import { runTalkPipeline } from "../src/bun/services/pipeline";
-import { makeFileSettingsStore, Settings } from "../src/bun/services/settings";
+import { makeOpenRouterClient, OpenRouter } from "../src/main/services/openrouter";
+import { OverlayService } from "../src/main/services/overlay";
+import { runTalkPipeline } from "../src/main/services/pipeline";
+import { makeFileSettingsStore, Settings } from "../src/main/services/settings";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -6,7 +6,7 @@ import {
   notchWindowHeight,
   pointerOverlayPlacement,
 } from "../src/shared/overlay-geometry";
-import { talkStartBlockers } from "../src/shared/talk-session";
+import { talkStartBlockers, EMPTY_AUDIO_ERROR } from "../src/shared/talk-session";
 import {
   VK_CONTROL,
   VK_LMENU,
@@ -101,7 +101,7 @@ describe("talkKeyEdges", () => {
     ).toEqual(["toggle"]);
   });
 
-  test("friendlyHotkey maps Electrobun accelerators to Ctrl", () => {
+  test("friendlyHotkey maps Electron accelerators to Ctrl", () => {
     expect(friendlyHotkey("CommandOrControl+Shift+Space")).toBe("Ctrl+Shift+Space");
   });
 });
@@ -112,6 +112,13 @@ describe("notchWindowHeight", () => {
     expect(notchWindowHeight(400, 1080)).toBe(400);
     expect(notchWindowHeight(undefined, 1080)).toBe(NOTCH_MIN_HEIGHT);
     expect(notchWindowHeight(NOTCH_BOOTSTRAP_HEIGHT, 200)).toBe(176);
+  });
+
+  test("keeps Settings tall enough even when the card was measured collapsed", () => {
+    expect(notchWindowHeight(72, 1080, true)).toBe(NOTCH_BOOTSTRAP_HEIGHT);
+    expect(notchWindowHeight(80, 1080, true)).toBe(NOTCH_BOOTSTRAP_HEIGHT);
+    expect(notchWindowHeight(600, 1080, true)).toBe(600);
+    expect(notchWindowHeight(undefined, 1080, true)).toBe(NOTCH_BOOTSTRAP_HEIGHT);
   });
 });
 
@@ -136,5 +143,12 @@ describe("talkStartBlockers", () => {
     expect(talkStartBlockers({ apiKey: "sk-or-v1-test", pipelineRunning: false })).toEqual({
       ok: true,
     });
+  });
+});
+
+describe("empty audio copy", () => {
+  test("tells the user to hold then release the mic", () => {
+    expect(EMPTY_AUDIO_ERROR.toLowerCase()).toContain("hold");
+    expect(EMPTY_AUDIO_ERROR.toLowerCase()).toContain("release");
   });
 });

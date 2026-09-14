@@ -83,7 +83,7 @@ export function friendlyHotkey(value: string): string {
   return value.replaceAll("CommandOrControl", "Ctrl").replaceAll("Control", "Ctrl");
 }
 
-/** Tried in order; first successful Electrobun GlobalShortcut wins. */
+/** Tried in order; first successful Electron globalShortcut wins. */
 export const TOGGLE_SHORTCUT_CANDIDATES = [
   "CommandOrControl+Shift+Space",
   "Control+Shift+Space",

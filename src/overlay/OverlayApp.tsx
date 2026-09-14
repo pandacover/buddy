@@ -1,29 +1,18 @@
-import Electrobun, { Electroview } from "electrobun/view";
 import { useEffect, useState } from "react";
 import type { PointerTarget } from "../shared/protocol";
-
-const rpc = Electroview.defineRPC({
-  maxRequestTime: 10_000,
-  handlers: {
-    requests: {},
-    messages: {},
-  },
-});
-
-const electrobun = new Electrobun.Electroview({ rpc });
 
 export default function OverlayApp() {
   const [point, setPoint] = useState<PointerTarget | null>(null);
 
   useEffect(() => {
-    const onCustom = (event: Event) => {
-      const detail = (event as CustomEvent<PointerTarget | null>).detail;
-      setPoint(detail);
+    const overlay = window.buddyOverlay;
+    if (!overlay) return;
+    const offShow = overlay.onShowPointer((next) => setPoint(next));
+    const offHide = overlay.onHidePointer(() => setPoint(null));
+    return () => {
+      offShow();
+      offHide();
     };
-    window.addEventListener("buddy-pointer", onCustom);
-    electrobun.rpc?.addMessageListener("showPointer", (next) => setPoint(next));
-    electrobun.rpc?.addMessageListener("hidePointer", () => setPoint(null));
-    return () => window.removeEventListener("buddy-pointer", onCustom);
   }, []);
 
   if (!point) return null;

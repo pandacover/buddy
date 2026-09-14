@@ -13,6 +13,6 @@ export function talkStartBlockers(input: {
 }
 
 export const EMPTY_AUDIO_ERROR =
-  "Didn't catch any audio. Tap the mic, speak, then tap again.";
+  "Didn't catch any audio. Hold the mic, speak, then release.";
 
 export const SCREEN_CAPTURE_ERROR = "Could not capture the screen.";
