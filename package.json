@@ -11,8 +11,8 @@
     "dev:hmr": "bun scripts/desktop.ts hmr",
     "desktop:prepare": "bun scripts/desktop.ts prepare",
     "build:views": "bun run build:mainview && bun run build:overlay",
-    "build:mainview": "vite build --config vite.mainview.config.ts",
-    "build:overlay": "vite build --config vite.overlay.config.ts",
+    "build:mainview": "bun x vite build --config vite.mainview.config.ts",
+    "build:overlay": "bun x vite build --config vite.overlay.config.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

@@ -6,10 +6,10 @@ import { electrobunAliases } from "./vite.shared";
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: await electrobunAliases(rootDir),
+    alias: electrobunAliases(rootDir),
   },
   root: "src/mainview",
   base: "./",
@@ -27,4 +27,4 @@ export default defineConfig(async () => ({
       allow: [rootDir],
     },
   },
-}));
+});
