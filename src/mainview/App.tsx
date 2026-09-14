@@ -57,6 +57,23 @@ export default function App() {
     rpc.addMessageListener("playAudio", (payload) => {
       playBase64Audio(payload.mimeType, payload.base64);
     });
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
+        return;
+      }
+      const spaceToggle =
+        event.code === "Space" &&
+        event.ctrlKey &&
+        (event.altKey || event.shiftKey);
+      const f8 = event.code === "F8";
+      if (!spaceToggle && !f8) return;
+      event.preventDefault();
+      void rpc.request.toggleTalk({});
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [recorder]);
 
   async function syncRecording(shouldRecord: boolean) {
@@ -91,8 +108,8 @@ export default function App() {
   }
 
   return (
-    <div className="h-full w-full px-3 pt-2">
-      <div className="rounded-[28px] border border-white/10 bg-buddy-bg/92 text-white shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+    <div className="h-full w-full px-3 pt-2" style={{ pointerEvents: "auto" }}>
+      <div className="rounded-[28px] border border-white/10 bg-buddy-bg text-white shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
         <div className="flex items-center gap-3 px-3 py-2">
           <button
             type="button"
@@ -126,10 +143,14 @@ export default function App() {
             }`}
             onPointerDown={(event) => {
               event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
               void electrobun.rpc?.request.startTalk({});
             }}
             onPointerUp={(event) => {
               event.preventDefault();
+              void syncRecording(false);
+            }}
+            onPointerCancel={() => {
               void syncRecording(false);
             }}
             aria-label="Hold to talk"
@@ -139,7 +160,10 @@ export default function App() {
         </div>
 
         {expanded ? (
-          <div className="space-y-3 border-t border-white/10 px-4 py-3 text-sm">
+          <div
+            className="space-y-3 border-t border-white/10 px-4 py-3 text-sm"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
             <label className="block">
               <span className="mb-1 block text-xs text-white/50">OpenRouter API key</span>
               <input
@@ -204,9 +228,10 @@ export default function App() {
             ) : null}
             {speech ? <p className="text-xs text-buddy-speak">{speech}</p> : null}
             <p className="text-[11px] leading-5 text-white/35">
-              Hold Ctrl+Alt (Windows) or Ctrl+Alt+Space as a toggle. Buddy captures the
-              screen, transcribes you, answers with a vision model, speaks, and points.
-              It never clicks.
+              Hold Left Ctrl+Left Alt to talk (Windows). If that is taken, use the
+              toggle shown in the notch (usually Ctrl+Shift+Space) or the mic
+              button. Buddy captures the screen, transcribes you, answers with a
+              vision model, speaks, and points. It never clicks.
             </p>
           </div>
         ) : null}

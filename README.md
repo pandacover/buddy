@@ -12,7 +12,7 @@ Buddy is a Windows desktop companion: hold Ctrl+Alt to talk, it captures the scr
 - [Effect](https://effect.website) services for settings, capture, OpenRouter, overlay, and the talk pipeline
 - React + Vite + Tailwind for the notch and pointer overlay
 
-Windows 11 is the target. macOS and Linux may build, but hold-to-talk uses `GetAsyncKeyState` on Windows. Other OSes fall back to a `Ctrl+Alt+Space` toggle plus the notch mic button.
+Windows 11 is the target. macOS and Linux may build; hold-to-talk is Windows-only (`GetAsyncKeyState`). Other OSes use the registered toggle shortcut plus the notch mic button.
 
 ## Install (Windows)
 
@@ -65,16 +65,20 @@ Equivalent one-liner if you prefer not to use the wrapper: `bunx electrobun@2.0.
 
 1. Leave the always-on notch visible (top center). Click it to open settings.
 2. Save an OpenRouter API key if you did not set `OPENROUTER_API_KEY`.
-3. **Hold Ctrl+Alt** and speak. Release to stop.
+3. **Hold Ctrl+Alt** and speak. Release to stop. If hold does not fire, use the toggle shown on the notch (Buddy tries `Ctrl+Shift+Space`, then `Ctrl+Alt+Space`, then `Ctrl+Shift+B`, then `F8`) or hold the mic button.
 4. Buddy captures the primary display, transcribes with `openai/whisper-large-v3-turbo`, asks the vision model (default `openai/gpt-4o-mini`), speaks with `hexgrad/kokoro-82m` voice `af_sky`, and draws a highlight ring/arrow when the model returns coordinates.
 
 ### Hotkey notes
 
-Electrobun's `GlobalShortcut` registers accelerator chords (keydown), not modifier-only hold/release. On Windows, Buddy polls `user32.GetAsyncKeyState` so **Ctrl+Alt hold** works without an extra key.
+Talk can be started three ways. None of them need Administrator or Accessibility permission.
 
-Also registered: **Ctrl+Alt+Space** as a start/stop toggle, in case hold polling fails or you are not on Windows. The notch mic button is a pointer-hold control and always works while Buddy is focused.
+1. **Hold Ctrl+Alt** (Windows) — Buddy polls `user32.GetAsyncKeyState` for left/right Ctrl and Alt. Press both to record; release to run the pipeline. Hold is paused while the settings panel is open so you can type an API key.
+2. **Toggle shortcut** — Electrobun `GlobalShortcut` is press-only, so this is a start/stop tap. Buddy registers the first free combo from: `Ctrl+Shift+Space`, `Ctrl+Alt+Space`, `Ctrl+Shift+B`, `F8`. The notch subtitle shows which one stuck. `Ctrl+Alt+Space` is often already taken by another app; that is why it is not first.
+3. **Mic button** on the notch — pointer-down starts, pointer-up stops. This works even if every global shortcut fails, as long as the notch is focused.
 
-If another app already owns Ctrl+Alt+Space, use the notch button.
+While Buddy is focused, `Ctrl+Shift+Space`, `Ctrl+Alt+Space`, and `F8` also work as in-window toggles (ignored while an input is focused).
+
+If another elevated (Run as administrator) window is focused, Windows will not deliver keys to Buddy. Run Buddy normally; do not run it as admin unless the app you are pointing at is also elevated.
 
 ## Settings
 

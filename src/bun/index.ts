@@ -17,6 +17,10 @@ import type {
   ScreenshotPayload,
 } from "../shared/protocol";
 import { startTalkHotkeys } from "./hotkeys";
+import {
+  PARKED_OVERLAY_FRAME,
+  pointerOverlayPlacement,
+} from "../shared/overlay-geometry";
 import { ElectrobunCaptureLive } from "./services/capture-electrobun";
 import { OpenRouterLive } from "./services/openrouter";
 import { OverlayLive } from "./services/overlay";
@@ -57,6 +61,10 @@ type NotchRPC = {
         response: { ok: true };
       };
       startTalk: {
+        params: Record<string, never>;
+        response: { ok: true };
+      };
+      toggleTalk: {
         params: Record<string, never>;
         response: { ok: true };
       };
@@ -121,13 +129,20 @@ function notchFrame(expanded: boolean) {
   };
 }
 
-function overlayFrame(display = Screen.getPrimaryDisplay().bounds) {
-  return {
-    x: Math.round(display.x),
-    y: Math.round(display.y),
-    width: Math.max(1, Math.round(display.width)),
-    height: Math.max(1, Math.round(display.height)),
-  };
+function parkOverlayWindow() {
+  overlayWindow.hide();
+  overlayWindow.setAlwaysOnTop(false);
+  overlayWindow.setFrame(
+    PARKED_OVERLAY_FRAME.x,
+    PARKED_OVERLAY_FRAME.y,
+    PARKED_OVERLAY_FRAME.width,
+    PARKED_OVERLAY_FRAME.height,
+  );
+}
+
+function raiseNotch() {
+  notchWindow?.setAlwaysOnTop(true);
+  notchWindow?.activate();
 }
 
 function toPublic(settings: BuddySettings): PublicSettings {
@@ -158,13 +173,14 @@ const overlayWindow = new BrowserWindow({
   passthrough: true,
   hidden: true,
   activate: false,
-  frame: overlayFrame(),
+  frame: PARKED_OVERLAY_FRAME,
   rpc: overlayRpc,
 });
-overlayWindow.setAlwaysOnTop(true);
 
 let overlayWasVisible = false;
 let pointerTimer: ReturnType<typeof setTimeout> | null = null;
+let settingsExpanded = false;
+let lastOverlayPlacement: ReturnType<typeof pointerOverlayPlacement> | null = null;
 
 function pushOverlayPointer(point: PointerTarget | null) {
   try {
@@ -178,37 +194,60 @@ function pushOverlayPointer(point: PointerTarget | null) {
   );
 }
 
+function showPointerOverlay(point: PointerTarget, display: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) {
+  const placement = pointerOverlayPlacement(point, display);
+  lastOverlayPlacement = placement;
+  overlayWindow.setFrame(
+    placement.frame.x,
+    placement.frame.y,
+    placement.frame.width,
+    placement.frame.height,
+  );
+  overlayWindow.setAlwaysOnTop(true);
+  overlayWindow.showInactive();
+  pushOverlayPointer(placement.local);
+  raiseNotch();
+}
+
 const overlayLayer = OverlayLive({
   showPointer: (point, display) =>
     Effect.sync(() => {
       if (pointerTimer) clearTimeout(pointerTimer);
-      overlayWindow.setFrame(
-        Math.round(display.x),
-        Math.round(display.y),
-        Math.max(1, Math.round(display.width)),
-        Math.max(1, Math.round(display.height)),
-      );
-      overlayWindow.showInactive();
-      pushOverlayPointer(point);
+      showPointerOverlay(point, display);
       pointerTimer = setTimeout(() => {
         pushOverlayPointer(null);
-        overlayWindow.hide();
+        parkOverlayWindow();
+        raiseNotch();
       }, POINTER_MS);
     }),
   hidePointer: () =>
     Effect.sync(() => {
       if (pointerTimer) clearTimeout(pointerTimer);
       pushOverlayPointer(null);
-      overlayWindow.hide();
+      parkOverlayWindow();
     }),
   hideForCapture: () =>
     Effect.sync(() => {
       overlayWasVisible = overlayWindow.isVisible();
-      overlayWindow.hide();
+      parkOverlayWindow();
     }),
   restoreAfterCapture: () =>
     Effect.sync(() => {
-      if (overlayWasVisible) overlayWindow.showInactive();
+      if (!overlayWasVisible || !lastOverlayPlacement) return;
+      overlayWindow.setFrame(
+        lastOverlayPlacement.frame.x,
+        lastOverlayPlacement.frame.y,
+        lastOverlayPlacement.frame.width,
+        lastOverlayPlacement.frame.height,
+      );
+      overlayWindow.setAlwaysOnTop(true);
+      overlayWindow.showInactive();
+      raiseNotch();
     }),
 });
 
@@ -295,6 +334,14 @@ async function beginListen() {
   }
 }
 
+function toggleTalk() {
+  if (listening) {
+    notchRpc.send.recordingChanged({ recording: false });
+    return;
+  }
+  void beginListen();
+}
+
 async function finishListen(audio: RecordedAudio) {
   if (pipelineRunning) return;
   listening = false;
@@ -363,12 +410,21 @@ const notchRpc = BrowserView.defineRPC<NotchRPC>({
         settings: await persistSettings(patch),
       }),
       setExpanded: ({ expanded }) => {
+        settingsExpanded = expanded;
         const frame = notchFrame(expanded);
         notchWindow?.setFrame(frame.x, frame.y, frame.width, frame.height);
+        if (expanded) {
+          parkOverlayWindow();
+        }
+        raiseNotch();
         return { ok: true as const };
       },
       startTalk: async () => {
         void beginListen();
+        return { ok: true as const };
+      },
+      toggleTalk: async () => {
+        toggleTalk();
         return { ok: true as const };
       },
       submitAudio: async (audio) => {
@@ -380,21 +436,8 @@ const notchRpc = BrowserView.defineRPC<NotchRPC>({
   },
 });
 
-const url = await getNotchUrl();
-notchWindow = new BrowserWindow({
-  title: "Buddy",
-  url,
-  titleBarStyle: "hidden",
-  transparent: true,
-  frame: notchFrame(false),
-  rpc: notchRpc,
-});
-notchWindow.setAlwaysOnTop(true);
-notchWindow.on("close", () => {
-  Utils.quit();
-});
-
 const hotkeys = await startTalkHotkeys({
+  isHoldPaused: () => settingsExpanded,
   onHoldStart: () => {
     void beginListen();
   },
@@ -402,12 +445,26 @@ const hotkeys = await startTalkHotkeys({
     if (listening) notchRpc.send.recordingChanged({ recording: false });
   },
   onToggle: () => {
-    if (listening) {
-      notchRpc.send.recordingChanged({ recording: false });
-      return;
-    }
-    void beginListen();
+    toggleTalk();
   },
 });
 lastHotkey = hotkeys.binding;
+
+const url = await getNotchUrl();
+notchWindow = new BrowserWindow({
+  title: "Buddy",
+  url,
+  titleBarStyle: "hidden",
+  transparent: true,
+  passthrough: false,
+  activate: true,
+  frame: notchFrame(false),
+  rpc: notchRpc,
+});
+notchWindow.setAlwaysOnTop(true);
+notchWindow.activate();
+notchWindow.on("close", () => {
+  Utils.quit();
+});
+
 console.log(`Buddy started. ${hotkeys.binding}`);

@@ -1,10 +1,16 @@
 import { GlobalShortcut } from "electrobun/main";
-import { TOGGLE_HOTKEY } from "../shared/protocol";
+import {
+  TOGGLE_SHORTCUT_CANDIDATES,
+  readTalkKeys,
+  talkKeyEdges,
+  type TalkKeySnapshot,
+} from "../shared/talk-keys";
 
 export type TalkHandlers = {
   onHoldStart: () => void;
   onHoldEnd: () => void;
   onToggle: () => void;
+  isHoldPaused?: () => boolean;
 };
 
 type KeyPoller = {
@@ -13,31 +19,66 @@ type KeyPoller = {
   detail: string;
 };
 
-const VK_CONTROL = 0x11;
-const VK_MENU = 0x12;
+type AsyncKeyStateLib = {
+  symbols: {
+    GetAsyncKeyState: (virtualKey: number) => number;
+  };
+};
+
+async function openUser32(): Promise<AsyncKeyStateLib | null> {
+  if (process.platform !== "win32") return null;
+  const { dlopen, FFIType } = await import("bun:ffi");
+  const candidates = [
+    "user32.dll",
+    "C:\\Windows\\System32\\user32.dll",
+    "C:\\Windows\\SysWOW64\\user32.dll",
+  ];
+  for (const path of candidates) {
+    try {
+      return dlopen(path, {
+        GetAsyncKeyState: {
+          args: [FFIType.i32],
+          // x64 returns SHORT in RAX; i32 avoids dropping the 0x8000 bit.
+          returns: FFIType.i32,
+        },
+      });
+    } catch {
+      // Try the next path.
+    }
+  }
+  return null;
+}
 
 async function startWindowsHold(handlers: TalkHandlers): Promise<KeyPoller | null> {
   if (process.platform !== "win32") return null;
 
   try {
-    const { dlopen, FFIType } = await import("bun:ffi");
-    const user32 = dlopen("user32.dll", {
-      GetAsyncKeyState: {
-        args: [FFIType.i32],
-        returns: FFIType.i16,
-      },
-    });
+    const user32 = await openUser32();
+    if (!user32) {
+      console.warn("Windows GetAsyncKeyState is unavailable (user32.dll)");
+      return null;
+    }
 
-    const isDown = (vk: number) =>
-      (user32.symbols.GetAsyncKeyState(vk) & 0x8000) !== 0;
-
-    let held = false;
+    let previous: TalkKeySnapshot | null = null;
     const timer = setInterval(() => {
-      const next = isDown(VK_CONTROL) && isDown(VK_MENU);
-      if (next && !held) handlers.onHoldStart();
-      if (!next && held) handlers.onHoldEnd();
-      held = next;
-    }, 32);
+      const paused = handlers.isHoldPaused?.() ?? false;
+      const snapshot = readTalkKeys((vk) => user32.symbols.GetAsyncKeyState(vk));
+      const edges = talkKeyEdges(previous, snapshot);
+      previous = snapshot;
+
+      if (paused) {
+        if (edges.holdEnd) handlers.onHoldEnd();
+        return;
+      }
+
+      if (edges.toggle) {
+        if (snapshot.hold) handlers.onHoldEnd();
+        handlers.onToggle();
+        return;
+      }
+      if (edges.holdStart) handlers.onHoldStart();
+      if (edges.holdEnd) handlers.onHoldEnd();
+    }, 16);
 
     return {
       stop: () => clearInterval(timer),
@@ -50,29 +91,42 @@ async function startWindowsHold(handlers: TalkHandlers): Promise<KeyPoller | nul
   }
 }
 
+function registerToggleShortcut(onToggle: () => void): string | null {
+  for (const accelerator of TOGGLE_SHORTCUT_CANDIDATES) {
+    try {
+      if (GlobalShortcut.register(accelerator, onToggle)) {
+        return accelerator;
+      }
+    } catch (error) {
+      console.warn(`GlobalShortcut.register(${accelerator}) failed:`, error);
+    }
+  }
+  return null;
+}
+
 export async function startTalkHotkeys(handlers: TalkHandlers): Promise<{
   stop: () => void;
   binding: string;
 }> {
   const hold = await startWindowsHold(handlers);
-  let registered = false;
-  try {
-    registered = GlobalShortcut.register(TOGGLE_HOTKEY, handlers.onToggle);
-  } catch (error) {
-    console.warn("GlobalShortcut.register failed:", error);
+  const registered = registerToggleShortcut(handlers.onToggle);
+
+  const parts: string[] = [];
+  if (hold) {
+    parts.push("Hold Ctrl+Alt to talk");
   }
+  if (registered) {
+    parts.push(`Toggle ${registered}`);
+  }
+  parts.push("Mic button on the notch");
 
   return {
-    binding: hold
-      ? `Hold Ctrl+Alt to talk. Fallback toggle: ${TOGGLE_HOTKEY}${registered ? "" : " (failed to register)"}`
-      : registered
-        ? `Hold-to-talk modifiers are not available on this OS. Toggle with ${TOGGLE_HOTKEY}.`
-        : `Could not register ${TOGGLE_HOTKEY}. Use the notch mic button.`,
+    binding: parts.join(" · "),
     stop: () => {
       hold?.stop();
       if (registered) {
         try {
-          GlobalShortcut.unregister(TOGGLE_HOTKEY);
+          GlobalShortcut.unregister(registered);
         } catch {
           // Ignore shutdown races.
         }

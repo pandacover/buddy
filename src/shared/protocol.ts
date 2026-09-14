@@ -58,5 +58,3 @@ export const DEFAULT_SETTINGS: Omit<BuddySettings, "apiKey"> = {
   ttsVoice: "af_sky",
   ttsFormat: "mp3",
 };
-
-export const TOGGLE_HOTKEY = "CommandOrControl+Alt+Space";

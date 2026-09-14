@@ -9,7 +9,6 @@ body,
   height: 100%;
   background: transparent;
   overflow: hidden;
-  user-select: none;
 }
 
 body {
@@ -18,4 +17,17 @@ body {
     ui-sans-serif,
     system-ui,
     sans-serif;
+  user-select: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+button,
+input,
+label,
+textarea {
+  user-select: text;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
