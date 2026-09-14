@@ -4,12 +4,10 @@ a heyclicky alt for windows
 
 Buddy is a Windows desktop companion: hold Ctrl+Alt to talk, it captures the screen, transcribes you, asks a vision model about the screenshot, speaks the answer, and points at a UI element. It does not click or type.
 
-This project is pinned to **Electrobun 2.0.1** (Bun main process) via `hutch.config.ts`.
-
 ## Stack
 
 - [Bun](https://bun.sh) runtime and package manager
-- [Electrobun](https://framework.blackboard.sh/electrobun/) desktop shell (`mainProcess: "bun"`)
+- [Electrobun](https://framework.blackboard.sh/electrobun/) desktop shell (`mainProcess: "bun"`), launched through the npm `electrobun` CLI
 - TypeScript
 - [Effect](https://effect.website) services for settings, capture, OpenRouter, overlay, and the talk pipeline
 - React + Vite + Tailwind for the notch and pointer overlay
@@ -18,32 +16,19 @@ Windows 11 is the target. macOS and Linux may build, but hold-to-talk uses `GetA
 
 ## Install (Windows)
 
-1. Install [Bun](https://bun.sh).
-2. Install [Hutch](https://github.com/blackboardsh/electrobun) (Electrobun's build CLI):
+You only need [Bun](https://bun.sh). Node.js and a global Hutch install are not required.
+
+1. Install Bun from https://bun.sh (PowerShell: `irm bun.sh/install.ps1 | iex`).
+2. Clone this repo and install JS dependencies:
 
 ```powershell
-& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
-```
-
-On macOS/Linux:
-
-```bash
-curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
-```
-
-3. Clone this repo, then:
-
-```bash
 cd buddy
-hutch electrobun sync
-hutch run install
+bun install
 ```
 
-`hutch electrobun sync` projects the Electrobun TypeScript SDK into `.hutch/devkit`. Vite aliases `electrobun/view` from that SDK.
+3. Copy `.env.example` to `.env` and set your key (or paste it in the notch later):
 
-4. Copy `.env.example` to `.env` and set your key (or paste it in the notch later):
-
-```bash
+```powershell
 copy .env.example .env
 ```
 
@@ -53,25 +38,28 @@ OPENROUTER_API_KEY=sk-or-v1-...
 
 Create a key at https://openrouter.ai/keys. Do not commit `.env`.
 
+Windows 11 already includes WebView2. The first `bun run dev` downloads Electrobun 2.0.1's paired build tools from GitHub into `%USERPROFILE%\.hutch\npm\` (private cache — not a PATH install). That step needs network access to GitHub. Do **not** run `electrobun init` or the Hutch PowerShell installer; those are what fail with `could not bootstrap release selection`.
+
 ## Run
 
-```bash
-hutch run dev
+```powershell
+bun run dev
 ```
 
-That builds the React views, then starts Electrobun in watch mode.
+That prepares the Electrobun SDK, builds the React views, then starts the desktop app in watch mode.
 
-With Vite HMR for the notch UI:
+| Script | What it does |
+| --- | --- |
+| `bun run dev` | Prepare SDK, build views, run Electrobun with `--watch` |
+| `bun run start` | Same as `dev` without `--watch` |
+| `bun run build` | Prepare SDK, build views, package `--env=stable` |
+| `bun run dev:hmr` | Vite HMR for the notch plus Electrobun (overlay is still a production Vite build) |
+| `bun run desktop:prepare` | Download/project the Electrobun SDK only (`electrobun prepare`) |
+| `bun run build:views` | Vite-only build of notch + overlay |
+| `bun test` | Unit tests |
+| `bun run typecheck` | `tsc --noEmit` |
 
-```bash
-hutch run dev:hmr
-```
-
-Production-style package:
-
-```bash
-hutch run build
-```
+Equivalent one-liner if you prefer not to use the wrapper: `bunx electrobun@2.0.1 prepare` then `bunx electrobun@2.0.1 dev --watch` after `bun run build:views`. Prefer `bun run dev` on Windows so the CLI runs under Bun instead of Node.
 
 ## Use
 
@@ -113,19 +101,27 @@ src/
   mainview/            # React notch / settings
   overlay/             # transparent pointer overlay
   shared/              # protocol + POINT/JSON parser
+scripts/
+  desktop.ts           # bun run dev/start/build → electrobun CLI
 ```
 
 The talk pipeline is `src/bun/services/pipeline.ts`: capture → STT → vision/chat → overlay point → TTS. Overlay drawing is highlight-only.
 
+`electrobun.config.ts` keeps `build.mainProcess: "bun"`. `hutch.config.ts` only pins Electrobun `2.0.1`; you do not need the `hutch` command on PATH.
+
 ## Tests
 
-```bash
+```powershell
 bun install
 bun test
 bun run typecheck
 ```
 
 Unit tests cover pointer parsing, PNG encoding, and mocked OpenRouter STT / vision / TTS. The desktop shell is not exercised in this Linux CI environment (no Electrobun display session).
+
+## Optional: global Hutch
+
+A machine-wide Hutch install is **not** part of the normal workflow. The npm CLI already caches a paired Hutch privately. If you already have Hutch and want its extra commands, you can still run `hutch electrobun prepare` / `hutch electrobun dev --watch` from this repo; the version pin in `hutch.config.ts` wins. Skip this unless you need it.
 
 ## Out of scope (v1)
 

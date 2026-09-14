@@ -1,4 +1,4 @@
-import type { ElectrobunConfig } from "electrobun";
+import type { ElectrobunConfig } from "./src/types/electrobun-config";
 
 export default {
   app: {

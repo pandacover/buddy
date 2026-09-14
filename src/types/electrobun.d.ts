@@ -1,42 +1,8 @@
 declare module "electrobun" {
-  export type WindowsWebView2Permission =
-    | "camera"
-    | "microphone"
-    | "geolocation"
-    | "notifications";
-
-  export interface ElectrobunConfig {
-    app: {
-      name: string;
-      identifier: string;
-      version: string;
-      description?: string;
-    };
-    runtime?: {
-      exitOnLastWindowClosed?: boolean;
-      [key: string]: unknown;
-    };
-    build?: {
-      mainProcess?: "bun" | "cottontail" | "zig" | "rust" | "go" | "odin";
-      bun?: {
-        entrypoint?: string;
-        external?: string[];
-      };
-      cottontail?: {
-        entrypoint?: string;
-      };
-      views?: Record<string, { entrypoint: string }>;
-      copy?: Record<string, string>;
-      watch?: string[];
-      watchIgnore?: string[];
-      mac?: { bundleCEF?: boolean };
-      linux?: { bundleCEF?: boolean };
-      win?: {
-        bundleCEF?: boolean;
-        autoGrantPermissions?: WindowsWebView2Permission[];
-      };
-    };
-  }
+  export type {
+    ElectrobunConfig,
+    WindowsWebView2Permission,
+  } from "./electrobun-config";
 }
 
 declare module "electrobun/main" {
