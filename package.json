@@ -1,0 +1,40 @@
+{
+  "name": "buddy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "a heyclicky alt for windows",
+  "main": "dist/main/index.cjs",
+  "scripts": {
+    "dev": "bun scripts/desktop.ts dev",
+    "start": "bun scripts/desktop.ts start",
+    "build": "bun scripts/desktop.ts build",
+    "build:views": "bun run build:mainview && bun run build:overlay",
+    "build:mainview": "bun x vite build --config vite.mainview.config.ts",
+    "build:overlay": "bun x vite build --config vite.overlay.config.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "bun node_modules/electron/install.js"
+  },
+  "dependencies": {
+    "effect": "^3.17.13",
+    "koffi": "^2.14.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "44.3.0",
+    "esbuild": "^0.25.9",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  },
+  "trustedDependencies": [
+    "koffi"
+  ]
+}

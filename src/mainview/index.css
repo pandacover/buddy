@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: normal;
+  background: transparent;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: visible;
+  pointer-events: none;
+}
+
+body {
+  font-family:
+    "Segoe UI",
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  user-select: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+button,
+input,
+label,
+textarea,
+[data-buddy-card] {
+  user-select: text;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
